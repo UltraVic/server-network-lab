@@ -1,0 +1,49 @@
+# /etc/systemd/system/notes-api.service (하드닝 적용본). 보안점수 9.2→3.3.
+# 주의: ProtectHome=tmpfs (true 아님) — asyncpg가 ~/.postgresql 탐색 시 빈 홈을 봐야
+#       'Permission denied' 대신 'not found'로 무시한다(true면 startup 크래시).
+[Unit]
+Description=Notes FastAPI backend (gunicorn + uvicorn workers)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+User=app
+Group=app
+WorkingDirectory=/srv/notes/current/backend
+EnvironmentFile=/srv/notes/current/.env
+ExecStart=/srv/notes/current/backend/.venv/bin/gunicorn -c /srv/notes/current/backend/gunicorn.conf.py main:app
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=35
+Restart=always
+RestartSec=3
+
+# 리소스 제한 (현재 ~112MB → 여유 두고 캡)
+MemoryHigh=400M
+MemoryMax=512M
+TasksMax=200
+
+# 샌드박싱
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

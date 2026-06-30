@@ -769,3 +769,37 @@ systemctl list-timers notes-backup.timer       # 다음 실행 확인
 > **복원**: `gunzip -c notes-<ts>.sql.gz | psql "$DATABASE_URL"`. 정기 **복원 드릴**로 백업이 실제 살아나는지 확인하는 게 실무(백업은 "복원될 때"만 백업).
 
 > **이 파트 핵심**: 스키마 변경 = **마이그레이션(버전관리)**, 파이프라인이 자동 적용(expand 우선). 데이터는 **타이머 백업** + 복원 드릴. 다음 후보: 보안 하드닝(systemd 샌드박싱·rate limit·ufw) / 진짜 HTTPS(도메인+Let's Encrypt) / 진짜 0갭(socket activation).
+
+---
+---
+
+# 🛡️ 패턴 A 실무 확장 IV — 보안 하드닝 & 운영 견고화
+
+> 운영 준비도 점검([ops-readiness-checklist.md](ops-readiness-checklist.md))의 Tier1~2 항목 처리. 적용본 설정은 [`ops/`](../ops/)에 보존.
+
+## 17. systemd 샌드박싱 + 리소스 제한
+- 노출도 측정: `systemd-analyze security notes-api` → **하드닝 전 9.2 UNSAFE, 후 3.3 OK**.
+- **리소스**: `MemoryMax=512M`/`MemoryHigh=400M`/`TasksMax=200` → 누수·폭주가 박스 전체 RAM을 먹는 것 차단(`max_requests` 워커 재생성과 2중 방어).
+- **샌드박싱**: `ProtectSystem=strict`(FS 읽기전용), `NoNewPrivileges`, `PrivateTmp`, 커널 보호류, `SystemCallFilter=@system-service`, `RestrictAddressFamilies` 등. (전체: `ops/systemd/notes-api.service`)
+- ⚠️ **함정(실제 겪음)**: `ProtectHome=true`면 asyncpg가 시작 시 `~/.postgresql` 클라이언트 인증서를 탐색하다 'Permission denied' → 풀 생성 실패 → **startup 크래시**(503). → **`ProtectHome=tmpfs`**(빈 홈)로 해결. "샌드박싱이 앱을 깨뜨릴 수 있다"의 산 증거 — **적용 후 반드시 실제 요청으로 검증**.
+
+## 18. nginx 보호 (rate-limit·타임아웃·바디·헤더)
+- `limit_req_zone`(http 컨텍스트) + `limit_req`: **/login 분당 10**(무차별 대입 차단, 초과 429), 일반 API 30r/s.
+- `client_max_body_size 1m`(거대 요청 413), 프록시 타임아웃, 보안헤더(`nosniff`/`DENY`/`no-referrer`). SSE 위해 `/api/` 는 `proxy_read_timeout 60s`.
+- 검증: 로그인 연타→200×6(버스트)→429, 2MB→413, 헤더 존재. (전체: `ops/nginx/notes.conf`)
+
+## 19. ufw 방화벽 (+ WSL mirrored 함정)
+- 외부는 80/443/22만, 나머지 인바운드 deny. (`ops/ufw/setup-ufw.sh`)
+- ⚠️ **WSL mirrored 함정(실제 겪음)**: `127.0.0.1`이 `lo`를 안 타 ufw 기본 loopback 허용(`-i lo`)에 안 걸림 → 내부통신(nginx→gunicorn, gunicorn→pg)이 끊겨 **504**. → **`ufw allow from 127.0.0.0/8`**(출발지 기준)로 우회하면 외부는 막고 내부는 통과. 진짜 VPS는 이 줄 불필요(`lo` 정상).
+- 본질: **WSL의 외부 차단 1차 관문은 Windows 방화벽**(§7). ufw는 보조 + VPS 이식용 패턴.
+
+## 20. 헬스체크 심화 (liveness → readiness)
+- 기존 `/health`는 풀 객체만 봄 → DB 죽어도 200(거짓 양호). → **실제 `SELECT 1`** 쿼리, 실패 시 **503**(`pool.acquire(timeout=2)`로 풀 고갈 시도 매달리지 않음).
+- 효과: deploy.sh 헬스 게이트가 "떴지만 DB 안 되는" 배포를 **503으로 잡아 자동 롤백**, 모니터링도 DB 장애를 정확히 인지. 검증: `systemctl stop postgresql`→503, start→200.
+
+## 21. 백업 안전성 (복원 드릴 · 오프사이트 · 시크릿)
+- **복원 드릴**: 임시 DB에 최신 덤프 복원 → 행수·`alembic_version` 확인 → 삭제. *"백업은 복원될 때만 백업."*
+  - RPO 교훈: 덤프는 **시점 스냅샷** → 복원 행수가 라이브보다 적을 수 있음(일1회=최대 24h 유실). 줄이려면 주기↑/WAL 아카이빙(PITR).
+- **오프사이트**: `backup.sh`가 Windows `/mnt/c`에도 사본 → WSL 초기화돼도 생존. **`.env`(시크릿)도 백업** — 없으면 JWT_SECRET·DB비번 복구 불가. ⚠️ 평문이라 실무는 **gpg/age 암호화** 또는 시크릿 매니저.
+
+> **이 파트 핵심**: 격리·제한으로 **폭발반경 축소**(systemd), **입구 보호**(nginx·ufw), **진짜 상태 노출**(readiness), **데이터 생존**(오프사이트+복원드릴). 남은 큰 것: 모니터링/알림, CI 테스트 게이트, 진짜 HTTPS(도메인+Let's Encrypt), 진짜 0갭(socket activation), **그리고 결국 실제 VPS 이식**(WSL의 구조적 한계: idle-sleep·loopback·단일 호스트).
