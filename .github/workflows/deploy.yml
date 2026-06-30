@@ -18,10 +18,12 @@ jobs:
       - name: pytest (인증/보안 단위 테스트)
         working-directory: backend
         run: |
-          rm -rf /tmp/ci-venv
-          python3 -m venv /tmp/ci-venv
-          /tmp/ci-venv/bin/pip install -q -r requirements.txt pytest
-          /tmp/ci-venv/bin/pytest -q
+          # 잡 전용 임시디렉터리($RUNNER_TEMP, 러너 소유·자동 청소) — /tmp 공유 충돌 방지
+          VENV="$RUNNER_TEMP/ci-venv"
+          rm -rf "$VENV"
+          python3 -m venv "$VENV"
+          "$VENV/bin/pip" install -q -r requirements.txt pytest
+          "$VENV/bin/pytest" -q
 
   deploy:
     needs: test            # ← test 통과해야만 실행 (실패하면 배포 차단)
