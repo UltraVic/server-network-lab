@@ -505,42 +505,63 @@ WantedBy=sockets.target
 >
 > 결론: 이 랩에서는 **(a) restart** 로 간다(아래 deploy.sh). 0갭이 꼭 필요해지면 (b)로 올린다.
 
+### 11-4. git 형상관리 연동 (릴리스 소스 = 커밋 SHA)
+
+릴리스를 "복사한 폴더"가 아니라 **git 커밋**으로 묶으면 무중단 배포가 완성된다 — 무엇이 라이브인지 SHA로 확정되고, 롤백이 커밋 단위가 되며, `git log`가 곧 배포 이력이 된다.
+
+```
+[개발 PC] ──git push──▶ [GitHub origin]
+                            │  (public이면 서버가 인증 없이 fetch)
+                            ▼
+[서버] /srv/notes/repo.git  (bare clone = 코드 원본 캐시)
+        └─ 배포 시: git fetch → git archive <ref> → releases/<ts>-<sha>/
+```
+
+- 개발 PC: `git init` → `.gitignore`로 `.env`·`.venv` 제외 → GitHub로 push. `.gitattributes`에 `* text=auto eol=lf`를 둬 줄바꿈을 LF로 고정(Linux로 갈 셸이 CRLF로 깨지지 않게).
+- 서버는 한 번만 `git clone --bare <url> /srv/notes/repo.git` (app 소유). 이후 배포 때 `fetch`로 최신화.
+- **서버는 편집하는 곳이 아니라 배포받는 곳** — 서버에서 만든 설정(gunicorn.conf.py 등)도 repo에 커밋해 git을 진실의 소스로 유지.
+- 릴리스명 = `<타임스탬프>-<짧은SHA>` → 디렉터리 이름만 봐도 어느 커밋인지 안다.
+
 ---
 
-## 12. deploy.sh — 한 줄 배포 (생성→flip→헬스체크→자동 롤백)
+## 12. deploy.sh — 한 줄 배포 (fetch→archive→flip→헬스체크→자동 롤백)
 
-위 조각들을 하나로 묶는다. **새 릴리스 생성 → 심볼릭링크 원자적 교체 → 헬스체크 → 실패 시 자동 롤백 → 오래된 릴리스 정리.**
+위 조각들을 하나로 묶는다. **git fetch → 커밋 추출(archive) → 릴리스 venv → 심볼릭링크 원자적 교체 → 헬스체크 → 실패 시 자동 롤백 → 오래된 릴리스 정리.**
 
 `/srv/notes/deploy.sh` (소유: `app`, `chmod +x`):
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ROOT=/srv/notes
-SRC=${1:?사용법: deploy.sh <소스경로>}      # 새 코드 위치 (git 작업트리/rsync 받은 곳)
-KEEP=5                                       # 보관할 릴리스 개수
+APP=/srv/notes
+GD=$APP/repo.git
+REF=${1:-main}            # 배포할 git ref (기본 main, 특정 커밋/브랜치/태그도 가능)
+KEEP=5                    # 보관 릴리스 개수
+
+echo "▶ [1/6] repo fetch"
+git --git-dir="$GD" fetch -q origin '+refs/heads/*:refs/heads/*'
+SHA=$(git --git-dir="$GD" rev-parse --short "$REF")
 TS=$(date +%Y%m%d-%H%M%S)
-REL="$APP_ROOT/releases/$TS"
+REL="$APP/releases/$TS-$SHA"
+echo "  → $REL"
 
-echo "▶ [1/6] 릴리스 $TS 준비"
+echo "▶ [2/6] git archive 로 커밋 스냅샷 추출"
 mkdir -p "$REL"
-cp -r "$SRC/backend" "$SRC/frontend" "$REL/"
+git --git-dir="$GD" archive "$REF" | tar -x -C "$REL"
 
-echo "▶ [2/6] 가상환경 + 의존성 (릴리스 전용 → 롤백 시 의존성도 그 버전)"
+echo "▶ [3/6] venv + deps (릴리스 전용 → 롤백 시 의존성도 그 버전)"
 python3 -m venv "$REL/backend/.venv"
 "$REL/backend/.venv/bin/pip" install -q -r "$REL/backend/requirements.txt"
-
-echo "▶ [3/6] 공통 자원 링크 (.env 는 shared 1벌을 공유)"
-ln -sfn "$APP_ROOT/shared/.env" "$REL/.env"
 # (선택) DB 마이그레이션 자리 — '패턴 A 실무 확장 II(DB 운영)'에서 Alembic 도입 시:
 #   "$REL/backend/.venv/bin/alembic" -c "$REL/backend/alembic.ini" upgrade head
 
-echo "▶ [4/6] 심볼릭링크 원자적 교체 (rename(2) = atomic)"
-PREV=$(readlink "$APP_ROOT/current" 2>/dev/null || true)   # 롤백 대상 기억
-ln -sfn "$REL" "$APP_ROOT/current.tmp"
-mv -T "$APP_ROOT/current.tmp" "$APP_ROOT/current"          # 절반 상태 없이 한 번에 전환
+echo "▶ [4/6] .env 링크 + current 원자적 flip (rename(2)=atomic)"
+ln -sfn "$APP/shared/.env" "$REL/.env"
+PREV=$(readlink "$APP/current" 2>/dev/null || true)   # 롤백 대상 기억
+ln -sfn "$REL" "$APP/current.tmp"
+mv -T "$APP/current.tmp" "$APP/current"               # 절반 상태 없이 한 번에 전환
 
-echo "▶ [5/6] 서비스 반영 + 헬스체크"
+echo "▶ [5/6] restart + 헬스체크"
 sudo systemctl restart notes-api          # 링크 flip은 restart로 새 경로 해소(§11-3 a)
 ok=0
 for _ in $(seq 1 10); do
@@ -550,9 +571,8 @@ done
 
 if [ "$ok" != 1 ]; then
   echo "❌ 헬스체크 실패 → 자동 롤백"
-  if [ -n "$PREV" ]; then
-    ln -sfn "$PREV" "$APP_ROOT/current.tmp"
-    mv -T "$APP_ROOT/current.tmp" "$APP_ROOT/current"
+  if [ -n "$PREV" ] && [ "$PREV" != "$REL" ]; then
+    ln -sfn "$PREV" "$APP/current.tmp"; mv -T "$APP/current.tmp" "$APP/current"
     sudo systemctl restart notes-api
     echo "↩ 이전 릴리스로 롤백: $PREV"
   fi
@@ -560,20 +580,27 @@ if [ "$ok" != 1 ]; then
 fi
 
 echo "▶ [6/6] 오래된 릴리스 정리 (최근 $KEEP개만 유지)"
-ls -1dt "$APP_ROOT/releases"/*/ | tail -n +$((KEEP+1)) | xargs -r rm -rf
-echo "✅ 배포 성공: $TS"
+ls -1dt "$APP/releases"/*/ | tail -n +$((KEEP+1)) | xargs -r rm -rf
+echo "✅ 배포 성공: $(basename "$REL")"
 ```
 **실무 디테일 — app 유저가 sudo로 서비스만 만지게 (NOPASSWD 한정):**
 ```bash
-# /etc/sudoers.d/notes  (visudo -f 로 편집)
+# /etc/sudoers.d/notes  (visudo -cf 로 문법 검증 — 잘못되면 sudo가 잠긴다)
 app ALL=(root) NOPASSWD: /usr/bin/systemctl restart notes-api, /usr/bin/systemctl reload notes-api
 ```
 배포·확인:
 ```bash
-sudo -u app /srv/notes/deploy.sh ~/notes-src     # app 소유로 실행 → 파일 권한도 app
-curl -s http://localhost/api/health
-ls -1dt /srv/notes/releases/*/                   # 릴리스 이력(최신순)
+sudo -u app /srv/notes/deploy.sh            # main 최신 배포
+sudo -u app /srv/notes/deploy.sh <ref>      # 특정 커밋/브랜치/태그 배포
+curl -s http://localhost/api/health         # version 으로 반영 확인
+ls -1dt /srv/notes/releases/*/              # 릴리스 이력(최신순, 이름에 SHA)
 ```
+
+> **✅ 이 랩에서 실제 검증함**
+> - 버전 `1.1→1.2` git 배포가 라이브 반영(`/health`의 version으로 확인).
+> - **`reload`=0갭(전부 200) vs `deploy.sh restart`=짧은 갭(`000` 몇 개)** 대비 관측 — §11-3 트레이드오프 그대로.
+> - 심볼릭링크 flip만으로 `1.1↔1.2` 즉시 롤백(재빌드 없음).
+> - **부팅 실패 커밋을 배포하니 헬스체크 10회 실패 → deploy.sh가 직전 릴리스로 자동 롤백**, 서비스는 정상 유지. 안전장치 작동 확인.
 
 ### 수동 롤백 (직전 릴리스로 1초 복귀)
 ```bash
