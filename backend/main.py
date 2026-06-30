@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 import asyncpg
 import jwt  # PyJWT
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -56,7 +56,7 @@ JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "30"))
 USERS = {"admin": "secret"}
 
 # 배포 버전 (재배포 실습용: 이 값을 바꿔 배포하면 /health 로 확인 가능)
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 
 
 @asynccontextmanager
@@ -109,11 +109,23 @@ class TokenOut(BaseModel):
 
 
 @app.get("/health")
-async def health() -> dict:
-    """헬스 체크 + 풀 상태 노출(학습용): 최대 크기와 지금 노는 커넥션 수."""
+async def health(response: Response) -> dict:
+    """헬스/레디니스 체크.
+
+    풀 객체만 보던 얕은 체크 → 실제로 DB에 `SELECT 1` 을 날려 '쿼리 가능'까지 확인.
+    DB가 안 되면 503 → 배포 게이트(deploy.sh)·모니터가 '안 좋음'을 정확히 인지.
+    (acquire timeout=2 로 풀 고갈 시에도 매달리지 않고 degraded 로 떨어진다.)
+    """
     pool = app.state.pool
+    try:
+        async with pool.acquire(timeout=2) as conn:
+            await conn.fetchval("SELECT 1")
+    except Exception:
+        response.status_code = 503
+        return {"status": "degraded", "db": "down", "version": APP_VERSION}
     return {
         "status": "ok",
+        "db": "ok",
         "version": APP_VERSION,              # 재배포 실습: 배포된 버전 확인용
         "pool_max": pool.get_max_size(),     # 설정된 풀 크기 (= POOL_SIZE)
         "pool_idle": pool.get_idle_size(),   # 지금 비어 있는(빌릴 수 있는) 커넥션 수
