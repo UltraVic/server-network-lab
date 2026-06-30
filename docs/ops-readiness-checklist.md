@@ -4,7 +4,7 @@
 > 근거 문서: [wsl-pattern-a-deploy.md](wsl-pattern-a-deploy.md) §10~16.
 
 ## 🔴 Tier 1 — 운영하면 곧 문제
-- [ ] **WSL은 운영 호스트가 아님** — 유휴 시 잠듦·단일 머신·공인 IP 없음. 실서비스는 always-on VPS 필요. (지금 자산은 그대로 VPS로 이식 가능)
+- [ ] **WSL은 운영 호스트가 아님** — 유휴 시 잠듦·단일 머신·공인 IP 없음. 실서비스는 always-on VPS 필요. → **이식 준비 가이드 작성됨**: [vps-migration-prep.md](vps-migration-prep.md) (실제 이식은 추후).
 - [x] **백업 안전성** — ✅오프사이트(/mnt/c)+복원드릴+.env 백업 완료(§21). 남음: RPO 24h(WAL 아카이빙 미도입), .env 평문(실무는 암호화).
 - [x] **리소스 제한** — ✅`MemoryMax=512M`/`MemoryHigh=400M`/`TasksMax=200`(§17).
 - [x] **관측(observability)** — ✅업타임 프로브(§22-1)+앱 /metrics(§22-2)+Prometheus(§22-3)+**ntfy 폰 푸시 알림**+**Grafana 대시보드(§24)**. 남음: 에러 트래킹(Sentry), node_exporter(호스트 지표), 로그(Loki), 알림 룰(Alertmanager).

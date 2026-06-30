@@ -883,3 +883,14 @@ jobs:
 - ⚠️ **함정(겪음)**: 기본 `admin/admin` API 인증이 거부될 수 있음(버전차) → `sudo grafana cli admin reset-admin-password '<pw>'`로 알려진 값 지정 후 로그인.
 
 > **핵심**: 대시보드도 **코드(JSON)로 버전관리** — 클릭 설정은 재현이 안 된다. 수집(Prometheus)과 시각화(Grafana)는 분리. 남은 관측 후보: 알림 룰(Grafana alerting/Alertmanager), node_exporter(호스트 지표), 로그 수집(Loki).
+
+---
+---
+
+# 🎓 졸업 — 실제 VPS 이식
+
+> 여기까지가 WSL 랩에서 쌓은 패턴 A 실무 스택(배포·DB·보안·관측·CI). 마지막 단계는 이걸 **실제 always-on VPS**로 옮겨 WSL의 구조적 한계(idle-sleep·loopback 우회·단일 호스트)를 벗어나는 것.
+>
+> **준비 가이드/체크리스트**: [vps-migration-prep.md](vps-migration-prep.md)
+> — 그대로 이식되는 자산, WSL 전용 우회 제거, 도메인+Let's Encrypt·SSH 하드닝 추가, 단계별 이식 순서·검증.
+> 핵심: 지금까지 만든 거의 모든 것이 그대로 옮겨가고, 우회를 걷어내고 진짜 TLS를 더하면 된다.
