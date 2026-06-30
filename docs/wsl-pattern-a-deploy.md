@@ -894,3 +894,6 @@ jobs:
 > **준비 가이드/체크리스트**: [vps-migration-prep.md](vps-migration-prep.md)
 > — 그대로 이식되는 자산, WSL 전용 우회 제거, 도메인+Let's Encrypt·SSH 하드닝 추가, 단계별 이식 순서·검증.
 > 핵심: 지금까지 만든 거의 모든 것이 그대로 옮겨가고, 우회를 걷어내고 진짜 TLS를 더하면 된다.
+>
+> **빈 서버에 처음부터 올리는 실행 런북**: [server-setup.md](server-setup.md)
+> — 변수만 정하면 빈 Ubuntu(WSL이든 VPS든) → 전체 스택. `ops/`·`scripts/` cp + 도메인/오프사이트 치환 중심.
