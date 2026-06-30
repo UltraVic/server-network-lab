@@ -184,6 +184,28 @@ curl: (7) Failed to connect ... (×10)          ← 워커가 import에서 터�
 
 ---
 
+## §13. CI/CD — `git push` 자동 배포 (self-hosted 러너)
+
+### 목표
+`deploy.sh`를 사람이 치는 대신 **push하면 자동 실행**. 단 집 WSL은 공인 IP 없음(NAT) → GitHub가 못 들어옴 → **서버가 outbound로 폴링하는** self-hosted 러너 사용.
+
+### 한 일
+1. **러너 등록** (app 유저, `/home/app/actions-runner`) — GitHub Settings→Actions→Runners→New 에서 토큰 받아 `config.sh ... --labels self-hosted --unattended`. → `√ Runner successfully added`.
+2. **systemd 서비스화** — `sudo bash -c 'cd /home/app/actions-runner && ./svc.sh install app && ./svc.sh start'` → `actions.runner.UltraVic-server-network-lab.wsl-app` `active`, `Listening for Jobs`. (러너 실행 유저=app → 워크플로가 deploy.sh를 app 권한으로 바로 실행, NOPASSWD sudoers 활용)
+3. **워크플로** `.github/workflows/deploy.yml`: `on: push(main)` → `runs-on: self-hosted` → `run: /srv/notes/deploy.sh`. **checkout 불필요**(deploy.sh가 repo.git에서 fetch).
+
+```
+git push ─▶ GitHub ──(작업 큐)──▶ [WSL 러너(app)] ──▶ /srv/notes/deploy.sh ──▶ 무중단 배포(+자동롤백)
+                       ▲ outbound 폴링 (인바운드 0 = NAT 통과)
+```
+
+### ⚠️ 주의 (실측 반영)
+- **public + self-hosted 위험**: fork PR로 러너에서 코드 실행 가능 → GitHub 비권장. 완화: **`push`(main)만** 트리거, main push 권한은 본인뿐. 실무는 private 저장소 권장.
+
+> **결과**: 개발 루프 = **코드 수정 → `git push` → (자동) 배포 → 실패 시 자동 롤백.** 사람은 push만.
+
+---
+
 ## 💥 실습 중 만난 함정 (트러블슈팅)
 
 | 증상 | 원인 | 해결 |

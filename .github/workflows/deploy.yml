@@ -1,0 +1,19 @@
+name: deploy
+
+# main 에 push 될 때만 배포. (fork PR 로는 안 돎 → public+self-hosted 위험 완화)
+on:
+  push:
+    branches: [main]
+
+# 배포는 한 번에 하나만(겹치는 push 직렬화). 진행 중인 배포는 취소하지 않음.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: self-hosted        # WSL 의 wsl-app 러너 (app 유저로 실행)
+    steps:
+      # checkout 불필요 — deploy.sh 가 /srv/notes/repo.git 에서 직접 fetch.
+      - name: 무중단 배포 실행 (fetch→archive→flip→헬스체크→자동롤백)
+        run: /srv/notes/deploy.sh

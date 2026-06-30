@@ -624,8 +624,8 @@ sudo systemctl restart notes-api
 ```bash
 # 무중단 reload (워커만 graceful 교체 — 경로 안 바뀔 때)
 sudo systemctl reload notes-api
-# 원자적 배포 (생성→flip→헬스체크→실패 시 자동 롤백)
-sudo -u app /srv/notes/deploy.sh ~/notes-src
+# 원자적 배포 (fetch→archive→flip→헬스체크→실패 시 자동 롤백)
+sudo -u app /srv/notes/deploy.sh           # main 최신 / 인자로 특정 ref 가능
 # 워커 상태 / 동시처리량 확인
 pgrep -af gunicorn ; curl -s http://localhost/api/health
 ```
@@ -636,3 +636,66 @@ pgrep -af gunicorn ; curl -s http://localhost/api/health
 > - **원자적 릴리스 = 절반 상태 없는 전환 + 즉시 롤백.** 배포는 "덮어쓰기"가 아니라 "링크 바꾸기".
 > - **배포는 헬스체크까지가 한 세트.** 실패하면 사람이 알기 전에 스크립트가 되돌린다.
 > - 다음 확장 후보: **DB 운영**(Alembic 마이그레이션을 deploy.sh의 [3/6] 자리에), **보안 하드닝**(systemd 샌드박싱·rate limit), **진짜 공개+HTTPS**(도메인+Let's Encrypt).
+
+---
+---
+
+# 🤖 패턴 A 실무 확장 II — CI/CD (self-hosted 러너 자동 배포)
+
+> §12까지는 `deploy.sh`를 **사람이 직접** 실행했다. 이제 **`git push`만 하면 자동 배포**되게 잇는다.
+> 집 PC/WSL은 공인 IP가 없어(NAT 뒤, §6) GitHub가 서버로 못 들어온다 → **서버가 바깥으로 나가 폴링하는** self-hosted 러너로 해결.
+
+## 14. self-hosted 러너로 push → 자동 배포
+
+### 14-1. 개념 — 왜 self-hosted 러너인가
+- GitHub 호스팅 러너는 우리 `/srv/notes`·systemd에 접근 못 함.
+- webhook/Actions가 **서버로 인바운드**하려면 공인 IP/터널 필요(NAT 문제).
+- **self-hosted 러너**: 서버 안에서 돌며 GitHub로 **outbound 폴링** → 인바운드 0, NAT 통과. push 시 작업을 받아 로컬에서 `deploy.sh` 실행.
+
+```
+[로컬] git push ─▶ [GitHub] ──(작업 큐)
+                                 ▲ outbound 폴링
+                   [WSL: 러너(app)] ──▶ /srv/notes/deploy.sh
+```
+
+### 14-2. 러너 설치·등록 (app 유저)
+GitHub: 저장소 → Settings → Actions → Runners → New self-hosted runner(Linux x64)에서 **등록 토큰**(1시간 만료) 확보. 러너를 **app 유저**로 설치 → 워크플로가 `deploy.sh`를 app 권한으로 바로 실행(이미 만든 NOPASSWD sudoers 활용).
+```bash
+RUNNER_VERSION=<페이지의 버전> ; TOKEN=<페이지의 --token>
+sudo -u app -H env RV="$RUNNER_VERSION" TK="$TOKEN" bash -c '
+  set -e
+  mkdir -p /home/app/actions-runner && cd /home/app/actions-runner
+  curl -fsSL -o runner.tar.gz "https://github.com/actions/runner/releases/download/v${RV}/actions-runner-linux-x64-${RV}.tar.gz"
+  tar xzf runner.tar.gz && rm runner.tar.gz
+  ./config.sh --url https://github.com/<owner>/<repo> --token "${TK}" --name wsl-app --labels self-hosted --unattended
+'
+```
+
+### 14-3. 러너를 systemd 서비스로 (부팅 자동기동)
+```bash
+# /home/app 은 app 전용이라 root로 통째 실행 (cd 포함)
+sudo bash -c 'cd /home/app/actions-runner && ./svc.sh install app && ./svc.sh start && ./svc.sh status'
+# → active (running) + 로그 "Listening for Jobs" 확인
+```
+
+### 14-4. 워크플로 — `.github/workflows/deploy.yml`
+```yaml
+name: deploy
+on:
+  push:
+    branches: [main]          # main push 만 (fork PR 로는 안 돎)
+concurrency: { group: deploy, cancel-in-progress: false }   # 배포 직렬화
+jobs:
+  deploy:
+    runs-on: self-hosted      # checkout 불필요 — deploy.sh 가 repo.git 에서 fetch
+    steps:
+      - run: /srv/notes/deploy.sh
+```
+
+### 14-5. ⚠️ public 저장소 + self-hosted 주의
+- public + self-hosted = fork PR로 **러너에서 코드 실행** 위험 → GitHub도 비권장.
+- 완화: **`push`(main) 트리거만** 사용(`pull_request` 안 씀), main push 권한은 본인만.
+- 실무/민감 프로젝트는 **private 저장소** 권장(그 경우 서버 fetch에 deploy key/PAT 필요).
+
+> **결과**: 개발 루프가 **코드 수정 → `git push` → (자동) deploy.sh → 헬스체크 실패 시 자동 롤백** 으로 완성. 사람은 push만 한다.
+> **✅ 검증(이 랩)**: 워크플로를 push하자 `wsl-app` 러너가 작업을 받아 새 릴리스를 빌드·배포(Actions 탭에서 초록 체크).
