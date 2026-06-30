@@ -21,19 +21,23 @@ echo "▶ [2/6] git archive 로 커밋 스냅샷 추출"
 mkdir -p "$REL"
 git --git-dir="$GD" archive "$REF" | tar -x -C "$REL"
 
-echo "▶ [3/6] venv + deps (릴리스 전용 → 롤백 시 의존성도 그 버전)"
+echo "▶ [3/7] venv + deps (릴리스 전용 → 롤백 시 의존성도 그 버전)"
 python3 -m venv "$REL/backend/.venv"
 "$REL/backend/.venv/bin/pip" install -q -r "$REL/backend/requirements.txt"
-# (선택) DB 마이그레이션 자리 — Alembic 도입 시:
-#   "$REL/backend/.venv/bin/alembic" -c "$REL/backend/alembic.ini" upgrade head
 
-echo "▶ [4/6] .env 링크 + current 원자적 flip (rename(2)=atomic)"
+echo "▶ [4/7] DB 마이그레이션 (alembic upgrade head)"
+# 추가(additive) 마이그레이션을 flip 전에 적용 = 새 코드가 뜨기 전 스키마 준비(expand 우선).
+# .env 의 DATABASE_URL 을 셸로 로드 → alembic env.py 가 읽음.
+set -a; . "$APP/shared/.env"; set +a
+"$REL/backend/.venv/bin/alembic" -c "$REL/backend/alembic.ini" upgrade head
+
+echo "▶ [5/7] .env 링크 + current 원자적 flip (rename(2)=atomic)"
 ln -sfn "$APP/shared/.env" "$REL/.env"
 PREV=$(readlink "$APP/current" 2>/dev/null || true)   # 롤백 대상 기억
 ln -sfn "$REL" "$APP/current.tmp"
 mv -T "$APP/current.tmp" "$APP/current"
 
-echo "▶ [5/6] restart + 헬스체크"
+echo "▶ [6/7] restart + 헬스체크"
 sudo systemctl restart notes-api          # 링크 flip은 restart로 새 경로 해소
 ok=0
 for _ in $(seq 1 10); do
@@ -42,7 +46,7 @@ for _ in $(seq 1 10); do
 done
 
 if [ "$ok" != 1 ]; then
-  echo "❌ 헬스체크 실패 → 자동 롤백"
+  echo "❌ 헬스체크 실패 → 자동 롤백 (코드만; 추가형 마이그레이션은 구코드와 호환)"
   if [ -n "$PREV" ] && [ "$PREV" != "$REL" ]; then
     ln -sfn "$PREV" "$APP/current.tmp"; mv -T "$APP/current.tmp" "$APP/current"
     sudo systemctl restart notes-api
@@ -51,6 +55,6 @@ if [ "$ok" != 1 ]; then
   exit 1
 fi
 
-echo "▶ [6/6] 오래된 릴리스 정리 (최근 $KEEP개만 유지)"
+echo "▶ [7/7] 오래된 릴리스 정리 (최근 $KEEP개만 유지)"
 ls -1dt "$APP/releases"/*/ | tail -n +$((KEEP+1)) | xargs -r rm -rf
 echo "✅ 배포 성공: $(basename "$REL")"
