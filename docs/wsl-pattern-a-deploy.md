@@ -816,7 +816,8 @@ systemctl list-timers notes-backup.timer       # 다음 실행 확인
 ### 22-1. 블랙박스 — 합성(synthetic) 업타임 프로브
 - `healthprobe.sh`(app): 1분마다 `/health` curl → UP/DOWN·응답시간 journald 기록, **DOWN 3연속 시 `monitor/alerts.log` 알림**. (`ops/systemd/notes-healthprobe.*`, `scripts/healthprobe.sh`)
 - `/health`가 readiness(§20)라 **DB 장애까지 잡음**. 조회: `journalctl -u notes-healthprobe`.
-- 실제 알림은 로그 기반(학습). 진짜 푸시는 alerts.log 트리거로 ntfy.sh/이메일/슬랙.
+- **진짜 폰 푸시(ntfy.sh)**: DOWN 3연속 시 🚨, 복구 시 ✅ 한 번씩(스팸 방지). 토픽은 `/srv/notes/shared/monitor.env`의 `NTFY_TOPIC`(repo 미포함=시크릿), 폰 ntfy 앱/브라우저로 구독. 계정·인바운드 불필요(서버가 outbound POST).
+- ⚠️ **테스트 함정(겪음)**: Ubuntu `postgresql.service`는 래퍼(active exited) → `stop`해도 클러스터가 안 멈춤. 실제 정지는 **`postgresql@18-main.service`**. DOWN 드릴은 이걸 멈추고 `/health=503` 확인 후 프로브.
 
 ### 22-2. 화이트박스 — 앱 `/metrics` (prometheus_client)
 - 미들웨어가 `http_requests_total{method,path,status}` + `http_request_duration_seconds{method,path}` 기록. path는 **라우트 템플릿**(`/notes/{note_id}`)으로 카디널리티 폭발 방지.
