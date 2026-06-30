@@ -1,0 +1,11 @@
+# /etc/systemd/system/notes-backup.timer 로 배치 후: systemctl enable --now notes-backup.timer
+[Unit]
+Description=Daily notes DB backup
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=300
+Persistent=true        # WSL이 꺼져 놓친 실행은 부팅 후 보충
+
+[Install]
+WantedBy=timers.target

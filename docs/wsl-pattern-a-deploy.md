@@ -699,3 +699,73 @@ jobs:
 
 > **결과**: 개발 루프가 **코드 수정 → `git push` → (자동) deploy.sh → 헬스체크 실패 시 자동 롤백** 으로 완성. 사람은 push만 한다.
 > **✅ 검증(이 랩)**: 워크플로를 push하자 `wsl-app` 러너가 작업을 받아 새 릴리스를 빌드·배포(Actions 탭에서 초록 체크).
+
+---
+---
+
+# 🗄️ 패턴 A 실무 확장 III — DB 운영 (Alembic 마이그레이션 + 자동 백업)
+
+> 앱이 커지면 스키마가 바뀐다. "그때그때 손으로 ALTER"는 추적·재현·롤백이 안 된다 → **Alembic 마이그레이션**으로 버전관리하고 **deploy.sh에 끼워** push 한 번에 스키마까지 반영. 데이터는 **pg_dump 타이머**로 정기 백업.
+
+## 15. Alembic 마이그레이션 (async/asyncpg)
+
+### 15-1. 왜 / 드라이버 선택
+- 앱 lifespan의 `CREATE TABLE IF NOT EXISTS`는 "초기 1테이블"엔 됐지만 컬럼 추가·인덱스·제약 변경을 추적 못 함.
+- Alembic = 스키마 변경을 **리비전(버전)** 으로 관리 → 각 배포가 어느 스키마인지 확정, 롤백 가능.
+- 이 서버는 Python 3.14 → psycopg2 휠 이슈 회피 위해 **이미 쓰는 asyncpg를 Alembic에서도 재사용**(async 구성). env.py에서 `postgresql://`→`postgresql+asyncpg://` 변환.
+
+### 15-2. 구성 파일
+- requirements: `alembic`, `SQLAlchemy` (asyncpg는 기존).
+- `backend/alembic.ini`: `script_location = %(here)s/migrations`(어디서 실행하든 OK), **url은 .env에서 주입**(시크릿 미포함).
+- `backend/migrations/env.py`: async 엔진, `os.environ["DATABASE_URL"]`→asyncpg URL, `target_metadata=None`(ORM 없이 `op.*`로 수동 기술).
+- **기존 DB 안전 채택**: `0001_baseline`을 `CREATE TABLE IF NOT EXISTS`로 → 기존 DB면 no-op(버전만 기록), 새 DB면 생성. 첫 `upgrade head`가 `alembic_version` 테이블 생성.
+
+### 15-3. deploy.sh 에 끼우기 ([4/7])
+```bash
+echo "▶ [4/7] DB 마이그레이션 (alembic upgrade head)"
+set -a; . "$APP/shared/.env"; set +a       # DATABASE_URL 로드(alembic env.py가 읽음)
+"$REL/backend/.venv/bin/alembic" -c "$REL/backend/alembic.ini" upgrade head
+```
+- **flip(restart) 전에** 적용 = 새 코드가 뜨기 전 스키마 준비.
+- **expand(추가형) 우선 원칙**: 컬럼 추가처럼 구코드와 호환되는 변경은 flip 전 적용해도 안전(구코드는 새 컬럼 무시). 파괴적 변경(컬럼 삭제/rename)은 **expand→deploy→contract** 2단계로 나눈다.
+- ⚠️ 서버 `/srv/notes/deploy.sh`는 자동 동기 안 됨 → deploy.sh를 바꾸면 서버 파일도 수동 갱신(tee). (repo 보관본: `scripts/deploy.sh`)
+
+### 15-4. 새 마이그레이션 추가 (예: 컬럼)
+`migrations/versions/0002_add_created_at.py`:
+```python
+def upgrade():
+    op.add_column("notes", sa.Column("created_at", sa.TIMESTAMP(timezone=True),
+                  server_default=sa.text("now()"), nullable=False))
+def downgrade():
+    op.drop_column("notes", "created_at")
+```
+→ 코드(모델/쿼리)와 **같은 커밋**에 담아 push → 자동배포 `[4/7]`이 적용(기존 행은 default로 백필).
+
+> **✅ 검증(이 랩)**: `git push` 하나로 0002 적용 → 기존 행 `created_at` 백필 → API가 `created_at` 서빙. lifespan의 CREATE TABLE은 제거(스키마=Alembic 소유, v1.3).
+
+## 16. pg_dump 자동 백업 (systemd timer)
+
+`/srv/notes/backup.sh` (app 소유):
+```bash
+set -a; . /srv/notes/shared/.env; set +a
+pg_dump "$DATABASE_URL" | gzip > /srv/notes/backups/notes-$(date +%Y%m%d-%H%M%S).sql.gz
+ls -1t /srv/notes/backups/notes-*.sql.gz | tail -n +8 | xargs -r rm -f   # 최근 7개 유지
+```
+`notes-backup.service`(oneshot, User=app, ExecStart=backup.sh) + `notes-backup.timer`:
+```ini
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=300
+Persistent=true        # WSL이 꺼져 놓친 백업은 부팅 후 보충
+[Install]
+WantedBy=timers.target
+```
+```bash
+sudo systemctl enable --now notes-backup.timer
+sudo systemctl start notes-backup.service      # 즉시 1회(검증)
+systemctl list-timers notes-backup.timer       # 다음 실행 확인
+```
+> 덤프엔 **스키마(+created_at)·데이터·`alembic_version`** 까지 포함 → 복원 시 마이그레이션 레벨도 일치.
+> **복원**: `gunzip -c notes-<ts>.sql.gz | psql "$DATABASE_URL"`. 정기 **복원 드릴**로 백업이 실제 살아나는지 확인하는 게 실무(백업은 "복원될 때"만 백업).
+
+> **이 파트 핵심**: 스키마 변경 = **마이그레이션(버전관리)**, 파이프라인이 자동 적용(expand 우선). 데이터는 **타이머 백업** + 복원 드릴. 다음 후보: 보안 하드닝(systemd 샌드박싱·rate limit·ufw) / 진짜 HTTPS(도메인+Let's Encrypt) / 진짜 0갭(socket activation).
