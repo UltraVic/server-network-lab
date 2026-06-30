@@ -56,26 +56,22 @@ JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "30"))
 USERS = {"admin": "secret"}
 
 # 배포 버전 (재배포 실습용: 이 값을 바꿔 배포하면 /health 로 확인 가능)
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """앱 수명주기: 시작 시 풀 생성+테이블 보장, 종료 시 풀 정리.
+    """앱 수명주기: 시작 시 풀 생성, 종료 시 풀 정리.
 
     sqlite처럼 매 요청 connect/close 하지 않는다. 풀을 '한 번' 만들어 두고
     모든 요청이 그 안의 커넥션을 빌려 쓴다(재사용) — 이게 Phase 5의 핵심.
+
+    ※ 스키마(테이블)는 Alembic이 소유한다 — 배포 시 deploy.sh [4/7] `alembic upgrade head`
+      가 적용하므로, 앱은 더 이상 CREATE TABLE 을 하지 않는다.
     """
     app.state.pool = await asyncpg.create_pool(
         DATABASE_URL, min_size=POOL_SIZE, max_size=POOL_SIZE
     )
-    async with app.state.pool.acquire() as conn:
-        await conn.execute(
-            "CREATE TABLE IF NOT EXISTS notes ("
-            "  id   SERIAL PRIMARY KEY,"
-            "  text TEXT NOT NULL"
-            ")"
-        )
     yield
     await app.state.pool.close()
 
@@ -99,6 +95,7 @@ class NoteIn(BaseModel):
 class Note(BaseModel):
     id: int
     text: str
+    created_at: datetime           # Phase(DB): Alembic 마이그레이션으로 추가된 컬럼
 
 
 class LoginIn(BaseModel):
@@ -208,8 +205,10 @@ async def stream(token: str = ""):
 # ── 메모 CRUD: 이제 풀에서 커넥션을 빌려 비동기로 질의 ───────
 @app.get("/notes", response_model=list[Note])
 async def list_notes(user: str = Depends(get_current_user)) -> list[Note]:
-    rows = await app.state.pool.fetch("SELECT id, text FROM notes ORDER BY id DESC")
-    return [Note(id=r["id"], text=r["text"]) for r in rows]
+    rows = await app.state.pool.fetch(
+        "SELECT id, text, created_at FROM notes ORDER BY id DESC"
+    )
+    return [Note(id=r["id"], text=r["text"], created_at=r["created_at"]) for r in rows]
 
 
 @app.post("/notes", response_model=Note, status_code=201)
@@ -217,11 +216,11 @@ async def create_note(note: NoteIn, user: str = Depends(get_current_user)) -> No
     text = note.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is empty")
-    # RETURNING id: Postgres에서 INSERT 직후 새 id를 한 번에 돌려받는다.
-    new_id = await app.state.pool.fetchval(
-        "INSERT INTO notes (text) VALUES ($1) RETURNING id", text
+    # RETURNING: INSERT 직후 새 id 와 (DB 기본값으로 채워진) created_at 을 한 번에 돌려받는다.
+    row = await app.state.pool.fetchrow(
+        "INSERT INTO notes (text) VALUES ($1) RETURNING id, created_at", text
     )
-    return Note(id=new_id, text=text)
+    return Note(id=row["id"], text=text, created_at=row["created_at"])
 
 
 @app.delete("/notes/{note_id}", status_code=204)
