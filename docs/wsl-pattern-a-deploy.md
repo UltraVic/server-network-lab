@@ -833,4 +833,37 @@ systemctl list-timers notes-backup.timer       # 다음 실행 확인
   - `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))` — p95 지연
 - 검증: 타깃 `up`, `http_requests_total{job="notes-api"}` 수집 확인.
 
-> **이 파트 핵심**: 블랙박스(살아있나?)·화이트박스(무슨 일이?)는 상호보완. 멀티워커면 메트릭은 **멀티프로세스 합산 필수**, `/metrics`는 내부 전용. 남은 것: 알림 채널(ntfy/메일), 대시보드(Grafana), 호스트 메트릭(node_exporter), 그리고 실제 VPS.
+> **이 파트 핵심**: 블랙박스(살아있나?)·화이트박스(무슨 일이?)는 상호보완. 멀티워커면 메트릭은 **멀티프로세스 합산 필수**, `/metrics`는 내부 전용. 남은 것: 대시보드(Grafana), 호스트 메트릭(node_exporter), 에러트래킹, 그리고 실제 VPS.
+
+---
+---
+
+# ✅ 패턴 A 실무 확장 VI — CI 테스트 게이트
+
+> push가 곧 배포(§14)인데 그 사이 자동 테스트가 없으면 깨진 코드도 배포된다. **테스트 통과해야만 배포**되게 게이트를 건다.
+
+## 23. 테스트 게이트 (`deploy needs test`)
+- 워크플로에 `test` 잡(pytest) 추가 + `deploy` 잡이 **`needs: test`** → 테스트 실패 시 배포 자동 차단.
+- 테스트: `backend/tests/test_auth.py` — 로그인/JWT 검증 등 **DB 불필요한 보안 핵심 로직**(`login()`·`_decode_user()`는 DB 연결 없이 순수). `conftest.py`가 임포트용 env 주입.
+```yaml
+jobs:
+  test:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - working-directory: backend
+        run: |
+          VENV="$RUNNER_TEMP/ci-venv"      # 잡 전용 임시디렉터리(러너 소유·자동청소)
+          rm -rf "$VENV"; python3 -m venv "$VENV"
+          "$VENV/bin/pip" install -q -r requirements.txt pytest
+          "$VENV/bin/pytest" -q
+  deploy:
+    needs: test                            # ← 통과해야만 배포
+    runs-on: self-hosted
+    steps:
+      - run: /srv/notes/deploy.sh
+```
+- ⚠️ **함정(겪음)**: CI venv를 `/tmp/ci-venv` 공유 경로에 두니, 다른 유저가 만든 동명 디렉터리를 **sticky `/tmp`에서 못 지워**(`rm` 실패 → `set -e`로 잡 실패). → **`$RUNNER_TEMP`**(잡별 격리·자동청소) 사용. CI는 공유 상태 오염을 피하라는 교훈.
+- ✅ **양방향 검증**: 테스트 실패 → deploy 건너뜀(릴리스 불변=배포 차단), 통과 → deploy 진행(새 릴리스).
+
+> **핵심**: 게이트는 "**실패가 배포를 막는** 것"을 봐야 진짜다. 다음: DB 통합 테스트(테스트 전용 DB), 커버리지, 린트(ruff).

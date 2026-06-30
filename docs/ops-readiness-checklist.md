@@ -11,7 +11,7 @@
 
 ## 🟡 Tier 2 — 실서비스 신뢰성
 - [x] **헬스체크 심화** — ✅`SELECT 1` readiness + DB 다운 시 503(§20). 검증: stop→503/start→200.
-- [ ] **CI 테스트 없음** — push→배포 사이 자동 테스트 0, 스테이징 없음.
+- [x] **CI 테스트 게이트** — ✅pytest(인증/JWT, DB불필요) + `deploy needs test`(§23). 실패=배포차단 검증. 남음: DB 통합테스트·커버리지·린트·스테이징.
 - [x] **nginx 보호** — ✅rate-limit(/login 분당10)·타임아웃·`client_max_body_size 1m`·보안헤더(§18).
 - [x] **방화벽(ufw)** — ✅80/443/22만 허용+deny(§19). WSL은 `from 127.0.0.0/8` 우회 필요(mirrored), 외부 1차 관문은 Windows 방화벽.
 - [ ] **단일 장애점** — 호스트1·DB1, 이중화 없음.
