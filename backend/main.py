@@ -56,7 +56,7 @@ JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "30"))
 USERS = {"admin": "secret"}
 
 # 배포 버전 (재배포 실습용: 이 값을 바꿔 배포하면 /health 로 확인 가능)
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 
 
 @asynccontextmanager
