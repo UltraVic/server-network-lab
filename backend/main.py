@@ -16,14 +16,24 @@
 import asyncio
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import asyncpg
 import jwt  # PyJWT
-from fastapi import Depends, FastAPI, Header, HTTPException, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    REGISTRY,
+    CollectorRegistry,
+    Counter,
+    Histogram,
+    generate_latest,
+    multiprocess,
+)
 from pydantic import BaseModel
 
 # ── Phase 7: 설정/시크릿은 환경에서 읽는다 (코드에 비밀 기본값을 두지 않음) ──
@@ -56,7 +66,7 @@ JWT_EXPIRE_MIN = int(os.getenv("JWT_EXPIRE_MIN", "30"))
 USERS = {"admin": "secret"}
 
 # 배포 버전 (재배포 실습용: 이 값을 바꿔 배포하면 /health 로 확인 가능)
-APP_VERSION = "1.4"
+APP_VERSION = "1.5"
 
 
 @asynccontextmanager
@@ -86,6 +96,42 @@ if os.getenv("ALLOW_CORS") == "1":
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+
+# ── 모니터링(M2): Prometheus 메트릭 ──────────────────────────
+# gunicorn 멀티워커라 각 워커가 따로 집계 → 멀티프로세스 모드(PROMETHEUS_MULTIPROC_DIR)
+# 로 워커들이 공유 디렉터리에 기록하고, /metrics 가 합산해서 노출한다.
+REQ_COUNT = Counter(
+    "http_requests_total", "HTTP 요청 수", ["method", "path", "status"]
+)
+REQ_LATENCY = Histogram(
+    "http_request_duration_seconds", "요청 처리 시간(초)", ["method", "path"]
+)
+
+
+@app.middleware("http")
+async def prometheus_mw(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed = time.perf_counter() - start
+    # 라우트 템플릿(/notes/{note_id})으로 라벨링 → 경로별 카디널리티 폭발 방지.
+    route = request.scope.get("route")
+    path = getattr(route, "path", "unmatched")
+    if path != "/metrics":  # 메트릭 엔드포인트 자체는 집계에서 제외
+        REQ_COUNT.labels(request.method, path, response.status_code).inc()
+        REQ_LATENCY.labels(request.method, path).observe(elapsed)
+    return response
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus 노출 엔드포인트. 멀티프로세스면 워커 전체를 합산."""
+    if os.environ.get("PROMETHEUS_MULTIPROC_DIR"):
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+    else:
+        registry = REGISTRY
+    return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
 
 class NoteIn(BaseModel):

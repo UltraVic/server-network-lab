@@ -14,3 +14,24 @@ keepalive = 5
 max_requests = 1000              # 워커가 N요청 처리 후 스스로 재생성 → 메모리 누수 방어
 max_requests_jitter = 100        # 재생성 시점 랜덤 분산(동시에 다 죽는 것 방지)
 # preload_app 은 기본 False 유지! True면 HUP reload로 새 코드가 반영 안 됨(§11-3 함정).
+
+
+# ── 모니터링(M2): prometheus_client 멀티프로세스 디렉터리 관리 ──
+# PROMETHEUS_MULTIPROC_DIR(systemd Environment=)이 있으면 워커들이 그 디렉터리에
+# 메트릭을 기록하고 /metrics 가 합산한다. fresh start마다 비우고, 워커 종료 시 정리.
+def on_starting(server):
+    import shutil
+    d = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if d:
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
+
+
+def child_exit(server, worker):
+    d = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if d:
+        try:
+            from prometheus_client import multiprocess
+            multiprocess.mark_process_dead(worker.pid)
+        except Exception:
+            pass
