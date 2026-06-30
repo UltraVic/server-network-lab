@@ -11,6 +11,7 @@ User=app
 Group=app
 WorkingDirectory=/srv/notes/current/backend
 EnvironmentFile=/srv/notes/current/.env
+Environment=PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
 ExecStart=/srv/notes/current/backend/.venv/bin/gunicorn -c /srv/notes/current/backend/gunicorn.conf.py main:app
 ExecReload=/bin/kill -s HUP $MAINPID
 KillMode=mixed

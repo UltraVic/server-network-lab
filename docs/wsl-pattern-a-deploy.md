@@ -803,3 +803,33 @@ systemctl list-timers notes-backup.timer       # 다음 실행 확인
 - **오프사이트**: `backup.sh`가 Windows `/mnt/c`에도 사본 → WSL 초기화돼도 생존. **`.env`(시크릿)도 백업** — 없으면 JWT_SECRET·DB비번 복구 불가. ⚠️ 평문이라 실무는 **gpg/age 암호화** 또는 시크릿 매니저.
 
 > **이 파트 핵심**: 격리·제한으로 **폭발반경 축소**(systemd), **입구 보호**(nginx·ufw), **진짜 상태 노출**(readiness), **데이터 생존**(오프사이트+복원드릴). 남은 큰 것: 모니터링/알림, CI 테스트 게이트, 진짜 HTTPS(도메인+Let's Encrypt), 진짜 0갭(socket activation), **그리고 결국 실제 VPS 이식**(WSL의 구조적 한계: idle-sleep·loopback·단일 호스트).
+
+---
+---
+
+# 📈 패턴 A 실무 확장 V — 모니터링 (관측)
+
+> 점검표 Tier1 "관측 없음" 처리. **블랙박스**(밖에서 두드려보기) + **화이트박스**(앱 내부 지표) 둘 다.
+
+## 22. 헬스 프로브 + 앱 메트릭 + Prometheus
+
+### 22-1. 블랙박스 — 합성(synthetic) 업타임 프로브
+- `healthprobe.sh`(app): 1분마다 `/health` curl → UP/DOWN·응답시간 journald 기록, **DOWN 3연속 시 `monitor/alerts.log` 알림**. (`ops/systemd/notes-healthprobe.*`, `scripts/healthprobe.sh`)
+- `/health`가 readiness(§20)라 **DB 장애까지 잡음**. 조회: `journalctl -u notes-healthprobe`.
+- 실제 알림은 로그 기반(학습). 진짜 푸시는 alerts.log 트리거로 ntfy.sh/이메일/슬랙.
+
+### 22-2. 화이트박스 — 앱 `/metrics` (prometheus_client)
+- 미들웨어가 `http_requests_total{method,path,status}` + `http_request_duration_seconds{method,path}` 기록. path는 **라우트 템플릿**(`/notes/{note_id}`)으로 카디널리티 폭발 방지.
+- ⚠️ **gunicorn 멀티워커 함정**: 워커마다 따로 집계 → 스크랩마다 값이 들쭉날쭉. → **멀티프로세스 모드**: `Environment=PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus`(PrivateTmp라 워커 공유), gunicorn `on_starting`(디렉터리 초기화)·`child_exit`(`mark_process_dead`) 훅, `/metrics`가 `MultiProcessCollector`로 합산. **검증: 두 번 스크랩해도 동일 합계.**
+- ⚠️ **노출 주의**: `/metrics`는 내부 전용 → nginx에서 `location = /api/metrics { return 404; }`로 외부 차단. Prometheus는 `127.0.0.1:8000` 직접 스크랩(루프백, nginx 우회 = rate-limit 무관).
+
+### 22-3. Prometheus 수집·저장·조회
+- apt `prometheus`(:9090, systemd 서비스). `prometheus.yml`에 `notes-api`(127.0.0.1:8000) 스크랩(15s). (`ops/prometheus/prometheus.yml`)
+- ufw가 9090 외부 차단 → 로컬 전용. 조회: 웹 UI `http://localhost:9090` 또는 HTTP API.
+- **PromQL 예시**:
+  - `http_requests_total` — 상태코드별 누적 요청 수
+  - `sum(rate(http_requests_total[1m]))` — 초당 요청률
+  - `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))` — p95 지연
+- 검증: 타깃 `up`, `http_requests_total{job="notes-api"}` 수집 확인.
+
+> **이 파트 핵심**: 블랙박스(살아있나?)·화이트박스(무슨 일이?)는 상호보완. 멀티워커면 메트릭은 **멀티프로세스 합산 필수**, `/metrics`는 내부 전용. 남은 것: 알림 채널(ntfy/메일), 대시보드(Grafana), 호스트 메트릭(node_exporter), 그리고 실제 VPS.

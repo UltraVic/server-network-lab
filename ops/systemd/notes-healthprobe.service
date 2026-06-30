@@ -1,0 +1,9 @@
+# /etc/systemd/system/notes-healthprobe.service — notes-healthprobe.timer 가 트리거.
+[Unit]
+Description=Notes health probe (synthetic uptime check)
+
+[Service]
+Type=oneshot
+User=app
+Group=app
+ExecStart=/srv/notes/healthprobe.sh

@@ -1,0 +1,11 @@
+# /etc/systemd/system/notes-healthprobe.timer 후: systemctl enable --now notes-healthprobe.timer
+[Unit]
+Description=Run notes health probe every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
