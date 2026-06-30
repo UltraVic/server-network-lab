@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>notes — server/network lab</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+    h1 { font-size: 1.3rem; }
+    .row { display: flex; gap: 8px; margin: 12px 0; }
+    input { flex: 1; padding: 8px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    li { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #eee; }
+    .meta { color: #888; font-size: 0.85rem; }
+    code { background: #f4f4f4; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>📝 notes <small style="font-size:0.6em;color:#0e7c7b">v1.1 🚀</small></h1>
+  <p class="meta">API_BASE = <code id="base"></code> — Phase에 따라 <code>app.js</code>에서 바꾼다</p>
+
+  <!-- Phase 4: 로그인 영역 (토큰 없을 때만 보임) -->
+  <div id="login-box">
+    <div class="row">
+      <input id="username" placeholder="아이디 (admin)" />
+      <input id="password" type="password" placeholder="비번 (secret)" />
+      <button id="login">로그인</button>
+    </div>
+    <p id="login-msg" class="meta"></p>
+  </div>
+
+  <!-- Phase 4: 메모 영역 (로그인 후에만 보임) -->
+  <div id="notes-box" hidden>
+    <p class="meta">로그인됨: <code id="who"></code> <button id="logout">로그아웃</button></p>
+    <div class="row">
+      <input id="text" placeholder="메모 입력 후 Enter" />
+      <button id="add">추가</button>
+    </div>
+    <ul id="list"></ul>
+
+    <!-- Phase 6: SSE 실시간 진행률 -->
+    <hr style="margin:24px 0;border:none;border-top:1px solid #eee" />
+    <p class="meta">⚡ Phase 6 — 실시간 진행률 (SSE)</p>
+    <div class="row">
+      <button id="start-job">작업 시작</button>
+      <div style="flex:1;background:#eee;border-radius:6px;overflow:hidden;align-self:center;height:18px">
+        <div id="bar" style="width:0;height:100%;background:#0e7c7b;transition:width .2s"></div>
+      </div>
+      <span id="pct" class="meta" style="align-self:center;min-width:3em;text-align:right">0%</span>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

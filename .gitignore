@@ -1,0 +1,12 @@
+# 시크릿/설정 — 절대 커밋 금지 (Phase 7 학습 포인트)
+.env
+
+# 백엔드
+__pycache__/
+*.db
+.venv/
+venv/
+
+# 프론트(차후 Vite 도입 시)
+node_modules/
+dist/

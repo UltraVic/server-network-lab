@@ -1,0 +1,54 @@
+# Phase 3 핵심 — 네트워크 토폴로지를 YAML로 가시화.
+# Phase 5 — Postgres(db) 추가. DB도 내부망 전용(호스트 비노출)으로 둔다.
+#
+# 관찰 포인트:
+#   - nginx 만 ports: 로 호스트(8080)에 노출된다.
+#   - backend·db 는 ports: 가 없다 → 호스트에서 직접 못 닿는다.
+#     하지만 같은 네트워크 안에선 서비스명(backend, db)으로 서로 닿는다 (내부 DNS).
+#   = Atomytics 가 백엔드/DB 를 외부에 안 여는 것과 같은 원리.
+
+services:
+  db:
+    image: postgres:16-alpine
+    # Phase 7: 비밀을 YAML에 박지 않고 .env 에서 끌어온다 (${VAR} 치환).
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    # ports 없음 → 호스트 비노출. 내부망의 backend 만 db:5432 로 닿는다.
+    expose:
+      - "5432"
+    # backend 가 너무 일찍 붙어 실패하지 않게, DB 준비 완료를 헬스체크로 알린다.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  backend:
+    build: ./backend
+    # Phase 7: DB 접속정보·JWT 비밀키를 .env 에서 조립해 주입. 코드/YAML 엔 값 없음.
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      POOL_SIZE: ${POOL_SIZE:-10}
+    depends_on:
+      db:
+        condition: service_healthy   # db 가 healthy 가 된 뒤에야 backend 기동
+    expose:
+      - "8000"   # 내부망 공개(문서화). 호스트 노출 아님.
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"          # 호스트 8080 → 컨테이너 80 (외부 진입점은 여기 하나뿐)
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./frontend:/usr/share/nginx/html:ro
+
+volumes:
+  pg-data:
