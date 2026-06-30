@@ -867,3 +867,19 @@ jobs:
 - ✅ **양방향 검증**: 테스트 실패 → deploy 건너뜀(릴리스 불변=배포 차단), 통과 → deploy 진행(새 릴리스).
 
 > **핵심**: 게이트는 "**실패가 배포를 막는** 것"을 봐야 진짜다. 다음: DB 통합 테스트(테스트 전용 DB), 커버리지, 린트(ruff).
+
+---
+---
+
+# 📊 패턴 A 실무 확장 VII — Grafana 대시보드
+
+> Prometheus(§22-3)의 시계열을 시각화. 데이터소스·대시보드를 **프로비저닝(선언적 파일)** 으로 관리 — 클릭 설정이 아니라 repo로.
+
+## 24. Grafana (프로비저닝 기반)
+- 설치: Grafana 공식 apt 저장소(`apt.grafana.com`) → `grafana-server`(:3000, systemd).
+- **데이터소스 프로비저닝** `/etc/grafana/provisioning/datasources/prometheus.yml`: Prometheus(`http://127.0.0.1:9090`), `uid=prometheus`.
+- **대시보드 프로비저닝** `/etc/grafana/provisioning/dashboards/notes.yml` → `/var/lib/grafana/dashboards/*.json` 자동 로드. `notes-api.json` 패널: **UP**(stat), **요청률 req/s by status**(timeseries), **p95 지연**(`histogram_quantile`). (전체: `ops/grafana/`)
+- 접근: 브라우저 `http://localhost:3000`. ufw가 3000 외부 차단(로컬 전용). 
+- ⚠️ **함정(겪음)**: 기본 `admin/admin` API 인증이 거부될 수 있음(버전차) → `sudo grafana cli admin reset-admin-password '<pw>'`로 알려진 값 지정 후 로그인.
+
+> **핵심**: 대시보드도 **코드(JSON)로 버전관리** — 클릭 설정은 재현이 안 된다. 수집(Prometheus)과 시각화(Grafana)는 분리. 남은 관측 후보: 알림 룰(Grafana alerting/Alertmanager), node_exporter(호스트 지표), 로그 수집(Loki).
